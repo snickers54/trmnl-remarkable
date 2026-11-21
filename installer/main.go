@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -186,7 +187,7 @@ func (s *server) preflight(w http.ResponseWriter, r *http.Request) {
 		message = "Device found, and its SSH key matches the one recorded last time."
 	}
 	if !compatible {
-		message = "This installer supports the reMarkable Paper Pro and reMarkable 2 on firmware 3.26 or 3.27, and the reMarkable 1 on 3.20 to 3.27. Nothing was changed."
+		message = "This installer supports the reMarkable Paper Pro and reMarkable 2 on firmware 3.26, 3.27 or 3.29, and the reMarkable 1 on 3.20 to 3.27. Nothing was changed."
 	}
 	writeJSON(w, http.StatusOK, response{OK: true, Message: message, Fingerprint: fingerprint, Model: deviceLabel(values), OSVersion: values["os"], Compatible: compatible, Installed: values["installed"] == "yes", Active: values["active"] == "yes", KnownHost: seenBefore && !changed, Changed: changed})
 }
@@ -242,6 +243,7 @@ func (s *server) install(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := identifyDevice(values)
+	appLoad, _ := target.appLoadFor(values["os"])
 
 	stage("Preparing the staging directory")
 	if _, err := run(client, "rm -rf /tmp/trmnl-install && mkdir -p /tmp/trmnl-install/appload /tmp/trmnl-install/licenses"); err != nil {
@@ -249,12 +251,13 @@ func (s *server) install(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The payload holds a build for each architecture. Uploading both would
-	// double a transfer the tablet already takes minutes over, so only the
-	// files for the detected device are sent.
+	// The payload holds a build for each architecture and an AppLoad for each
+	// firmware line. Uploading all of them would multiply a transfer the tablet
+	// already takes minutes over, so only the files for the detected device and
+	// firmware are sent.
 	names := make([]string, 0, len(manifest.Files))
 	for name := range manifest.Files {
-		if !payloadFileApplies(name, target.PayloadArch) {
+		if !payloadFileApplies(name, target.PayloadArch, appLoad) {
 			continue
 		}
 		names = append(names, name)
@@ -299,30 +302,20 @@ type progress struct {
 	Error string `json:"error,omitempty"`
 }
 
-// reactivateCommand detaches the XOVI start script with setsid so restarting
-// Xochitl cannot take the SSH session with it, then waits for the injection to
-// appear. An earlier version backgrounded the job and returned immediately,
-// which let the session teardown kill the child before it ran while still
-// reporting success.
+// reactivateCommand starts XOVI through the device's activate.sh, which
+// refuses an AppLoad built for another firmware line and rebuilds the
+// hashtable after an OS update. Starting XOVI without those checks makes
+// Xochitl abort on launch until the tablet reboots itself, and right after an
+// OS update that reboot falls back to the previous OS. An installation made
+// before activate.sh existed is therefore not started directly: installing
+// again brings the script and keeps the settings.
 const reactivateCommand = `set -e
-test -x /home/root/xovi/start
 test -f /home/root/xovi/exthome/appload/trmnl-remarkable/manifest.json
-rm -f /tmp/trmnl-xovi-start.log
-setsid sh -c 'exec /home/root/xovi/start' >/tmp/trmnl-xovi-start.log 2>&1 </dev/null &
-i=0
-while [ "$i" -lt 30 ]; do
-  sleep 1
-  i=$((i + 1))
-  pid=$(pidof xochitl 2>/dev/null | awk '{print $1}')
-  if [ -n "$pid" ] && [ -r "/proc/$pid/environ" ] &&
-     tr '\000' '\n' <"/proc/$pid/environ" | grep -q '^LD_PRELOAD=/home/root/xovi/xovi.so$'; then
-    echo REACTIVATED
-    exit 0
-  fi
-done
-echo "XOVI did not start within 30 seconds." >&2
-tail -n 5 /tmp/trmnl-xovi-start.log 2>/dev/null >&2
-exit 1`
+if [ ! -f /home/root/trmnl-remarkable/activate.sh ]; then
+  echo "This TRMNL installation predates the firmware checks. Click Install TRMNL to update it; settings are kept." >&2
+  exit 1
+fi
+sh /home/root/trmnl-remarkable/activate.sh`
 
 func (s *server) reactivate(w http.ResponseWriter, r *http.Request) {
 	s.deviceAction(w, r, reactivateCommand, "TRMNL is active again. Open AppLoad on the tablet.")
@@ -435,7 +428,9 @@ func connect(c credentials, expectedFingerprint string) (*ssh.Client, string, er
 // installer and its operation lock indefinitely.
 const (
 	inspectTimeout = 30 * time.Second
-	actionTimeout  = 3 * time.Minute
+	// Reactivating after an OS update rebuilds the hashtable first, which keeps
+	// Xochitl running for about a minute on its own.
+	actionTimeout  = 5 * time.Minute
 	uploadTimeout  = 5 * time.Minute
 	installTimeout = 15 * time.Minute
 )
@@ -484,7 +479,10 @@ func upload(client *ssh.Client, local, remote string) error {
 	defer session.Close()
 	session.Stdin = f
 	done := make(chan error, 1)
-	go func() { done <- session.Run("umask 077; cat > " + shellQuote(remote)) }()
+	// AppLoad builds are staged under appload/<version>/, so the directory may
+	// not exist yet.
+	command := "umask 077; mkdir -p " + shellQuote(path.Dir(remote)) + " && cat > " + shellQuote(remote)
+	go func() { done <- session.Run(command) }()
 	timer := time.NewTimer(uploadTimeout)
 	defer timer.Stop()
 	select {
@@ -542,9 +540,15 @@ func verifyPayload(dir string) (payloadManifest, error) {
 }
 
 // payloadFileApplies reports whether a payload entry belongs to the target
-// architecture. Files without an architecture marker in their name (the device
-// script, the licences, the manifest) always apply.
-func payloadFileApplies(name, arch string) bool {
+// architecture and AppLoad line. Files without an architecture marker in their
+// name (the device script, the licences, the manifest) always apply, and the
+// AppLoad builds live under appload/<version>/.
+func payloadFileApplies(name, arch, appLoad string) bool {
+	if rest, ok := strings.CutPrefix(name, "appload/"); ok {
+		if version, _, nested := strings.Cut(rest, "/"); nested && appLoad != "" && version != appLoad {
+			return false
+		}
+	}
 	if arch == "" {
 		return true
 	}
@@ -575,17 +579,44 @@ type supportedDevice struct {
 	Name        string
 	PayloadArch string
 	Arch        string
-	Firmware    []string
+	Firmware    []firmwareLine
 }
+
+// firmwareLine is one accepted reMarkable OS line and the AppLoad build that
+// hooks its interface. AppLoad 0.6.0 targets the interface 3.28 introduced, so
+// it cannot be used on 3.27 or earlier, and 0.5.3 crashes Xochitl on 3.29.
+// device/activate.sh and scripts/install-device-runtime.sh hold the same table.
+type firmwareLine struct {
+	Prefix  string
+	AppLoad string
+}
+
+var (
+	appLoadLegacy  = []firmwareLine{{"3.26.", "0.5.3"}, {"3.27.", "0.5.3"}}
+	appLoadCurrent = []firmwareLine{{"3.29.", "0.6.0"}}
+	rm1Firmware    = []firmwareLine{{"3.20.", "0.5.3"}, {"3.21.", "0.5.3"}, {"3.22.", "0.5.3"}, {"3.23.", "0.5.3"}, {"3.24.", "0.5.3"}, {"3.25.", "0.5.3"}, {"3.26.", "0.5.3"}, {"3.27.", "0.5.3"}}
+)
 
 // The reMarkable 1 reports two machine names depending on production batch, and
 // it no longer receives releases, so its firmware window reaches back to the
-// last line it shipped rather than ending with the current one.
+// last line it shipped rather than ending with the current one. 3.28 is absent
+// on purpose: AppLoad 0.6.0 supports it, but it has not been validated here.
 var supportedDevices = map[string]supportedDevice{
-	"reMarkable Ferrari":     {Name: "reMarkable Paper Pro", PayloadArch: "aarch64", Arch: "aarch64", Firmware: []string{"3.26.", "3.27."}},
-	"reMarkable 2.0":         {Name: "reMarkable 2", PayloadArch: "arm32", Arch: "armv7l", Firmware: []string{"3.26.", "3.27."}},
-	"reMarkable 1.0":         {Name: "reMarkable 1", PayloadArch: "arm32", Arch: "armv7l", Firmware: []string{"3.20.", "3.21.", "3.22.", "3.23.", "3.24.", "3.25.", "3.26.", "3.27."}},
-	"reMarkable Prototype 1": {Name: "reMarkable 1", PayloadArch: "arm32", Arch: "armv7l", Firmware: []string{"3.20.", "3.21.", "3.22.", "3.23.", "3.24.", "3.25.", "3.26.", "3.27."}},
+	"reMarkable Ferrari":     {Name: "reMarkable Paper Pro", PayloadArch: "aarch64", Arch: "aarch64", Firmware: append(append([]firmwareLine{}, appLoadLegacy...), appLoadCurrent...)},
+	"reMarkable 2.0":         {Name: "reMarkable 2", PayloadArch: "arm32", Arch: "armv7l", Firmware: append(append([]firmwareLine{}, appLoadLegacy...), appLoadCurrent...)},
+	"reMarkable 1.0":         {Name: "reMarkable 1", PayloadArch: "arm32", Arch: "armv7l", Firmware: rm1Firmware},
+	"reMarkable Prototype 1": {Name: "reMarkable 1", PayloadArch: "arm32", Arch: "armv7l", Firmware: rm1Firmware},
+}
+
+// appLoadFor returns the AppLoad version for an OS version, or false when the
+// firmware is outside this device's window.
+func (d supportedDevice) appLoadFor(osVersion string) (string, bool) {
+	for _, line := range d.Firmware {
+		if strings.HasPrefix(osVersion, line.Prefix) {
+			return line.AppLoad, true
+		}
+	}
+	return "", false
 }
 
 // identifyDevice matches a probe against the supported table. The machine name
@@ -625,12 +656,8 @@ func inspectDevice(client *ssh.Client) (map[string]string, bool, error) {
 	if !known || values["arch"] != device.Arch {
 		return values, false, nil
 	}
-	for _, prefix := range device.Firmware {
-		if strings.HasPrefix(values["os"], prefix) {
-			return values, true, nil
-		}
-	}
-	return values, false, nil
+	_, supported := device.appLoadFor(values["os"])
+	return values, supported, nil
 }
 
 const inspectCommand = `printf 'model='; tr -d '\000' </proc/device-tree/model 2>/dev/null || true; printf '\nmachine='; cat /sys/devices/soc0/machine 2>/dev/null || true; printf '\nos='; sed -n 's/^IMG_VERSION="\{0,1\}\([^" ]*\)"\{0,1\}$/\1/p' /etc/os-release | head -n1; printf '\narch='; uname -m; printf '\ninstalled='; test -f /home/root/xovi/exthome/appload/trmnl-remarkable/manifest.json && echo yes || echo no; printf 'active='; pid=$(pidof xochitl | awk '{print $1}'); if [ -n "$pid" ] && tr '\000' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -q '^LD_PRELOAD=/home/root/xovi/xovi.so$'; then echo yes; else echo no; fi`

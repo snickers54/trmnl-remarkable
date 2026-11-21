@@ -47,9 +47,15 @@ identifies the tablet first and sends only the half that matches it.
 
 | Device | Version | Status |
 |---|---|---|
-| Paper Pro, reMarkable 2 | 3.26.x, 3.27.x | Supported |
+| Paper Pro, reMarkable 2 | 3.26.x, 3.27.x, 3.29.x | Supported; 3.29.1.0 validated on a Paper Pro since 2.5.0 |
+| Paper Pro, reMarkable 2 | 3.28.x | Not supported; never validated |
 | reMarkable 1 | 3.20.x to 3.27.x | Supported; reMarkable no longer ships releases for this device |
 | Any device | Anything older or newer | The installer refuses to run until the version is validated |
+
+**Updated the tablet's OS?** Run **Install TRMNL** again rather than
+**Reactivate after reboot**. Each OS line needs its own AppLoad build, and the
+installer swaps it and rebuilds XOVI's per-firmware hashtable. Your settings are
+kept.
 
 **Computer running the installer**
 
@@ -86,7 +92,7 @@ Full details: [compatibility](docs/compatibility.md).
    password it shows you. Charge above 20% and connect the USB cable.
 2. Download the release ZIP and `SHA256SUMS.txt`, then check the hash matches:
 ```powershell
-   Get-FileHash .\TRMNL-for-reMarkable-2.4.0-Windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\TRMNL-for-reMarkable-2.5.0-Windows-x64.zip -Algorithm SHA256
 ```
 
 3. Extract the whole ZIP. Run **TRMNL Installer.exe** with the `payload` folder
@@ -232,7 +238,7 @@ installer again, find your tablet, and pick an action:
 
 | Action | What it does |
 |---|---|
-| **Reactivate after reboot** | Starts XOVI/AppLoad again without reinstalling |
+| **Reactivate after reboot** | Starts XOVI/AppLoad again without reinstalling. Refuses when the installed AppLoad doesn't match the tablet's OS; install again instead |
 | **Restore stock interface** | Stops the runtime injection, keeps your data |
 | **Uninstall TRMNL** | Removes the app, keeps settings and cache |
 | **Uninstall and erase data** | Also removes settings, cache, history, and logs |
@@ -253,6 +259,8 @@ never touches your notebooks, documents, or boot partitions. See
 | Dashboard is monochrome | On a Paper Pro, check the plugin renders colour; the tablet can't add colour that isn't in the image. The reMarkable 1 and 2 have no colour panel |
 | Colour dashboard looks flat on an rM1 or rM2 | Turn on **Smooth gradients** in Settings so colours are diffused into the panel's greys |
 | Gone after reboot | Use **Reactivate after reboot**. Returning to stock on reboot is deliberate |
+| Reactivate refuses after an OS update | Click **Install TRMNL**. It installs the AppLoad build for the new OS and keeps your settings |
+| The tablet screen restarts for about a minute during install | Expected the first time on a firmware: XOVI's hashtable is being built for it |
 | Battery drains fast | Longer refresh interval, lower front light, and the battery settings above |
 
 Read [support](.github/SUPPORT.md) before opening an issue, and never paste an API key,
@@ -292,7 +300,7 @@ and ShellCheck.
 
 ```powershell
 ./scripts/build.ps1
-./scripts/build-release.ps1 -Version 2.4.0
+./scripts/build-release.ps1 -Version 2.5.0
 ```
 
 `build.ps1` runs formatting, tests, `go vet`, both device cross-builds (ARM64

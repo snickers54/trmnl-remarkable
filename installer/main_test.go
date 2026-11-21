@@ -45,19 +45,28 @@ func TestIdentifyDevice(t *testing.T) {
 }
 
 func TestFirmwareWindowsPerDevice(t *testing.T) {
-	paperPro := supportedDevices["reMarkable Ferrari"]
-	if len(paperPro.Firmware) != 2 {
-		t.Fatalf("the Paper Pro window changed unexpectedly: %v", paperPro.Firmware)
-	}
-	// The reMarkable 1 stopped receiving releases, so it must accept the older
-	// line it shipped with; the tablets still being updated must not.
-	rm1 := supportedDevices["reMarkable 1.0"]
-	if !strings.Contains(strings.Join(rm1.Firmware, " "), "3.20.") {
-		t.Fatalf("the reMarkable 1 window excludes its last firmware: %v", rm1.Firmware)
-	}
-	for _, prefix := range supportedDevices["reMarkable 2.0"].Firmware {
-		if prefix == "3.20." {
-			t.Fatal("the reMarkable 2 window should track the validated firmware only")
+	for _, tc := range []struct {
+		machine, os, appLoad string
+		supported            bool
+	}{
+		{"reMarkable Ferrari", "3.27.3.0", "0.5.3", true},
+		{"reMarkable Ferrari", "3.26.0.68", "0.5.3", true},
+		{"reMarkable Ferrari", "3.29.1.0", "0.6.0", true},
+		// AppLoad 0.6.0 supports 3.28, but it has not been validated here.
+		{"reMarkable Ferrari", "3.28.0.1", "", false},
+		{"reMarkable Ferrari", "3.30.0.0", "", false},
+		{"reMarkable Ferrari", "3.25.0.0", "", false},
+		{"reMarkable 2.0", "3.29.1.0", "0.6.0", true},
+		{"reMarkable 2.0", "3.20.0.0", "", false},
+		// The reMarkable 1 stopped receiving releases, so it must accept the
+		// older line it shipped with, and nothing that needs AppLoad 0.6.0.
+		{"reMarkable 1.0", "3.20.1.0", "0.5.3", true},
+		{"reMarkable 1.0", "3.27.3.0", "0.5.3", true},
+		{"reMarkable 1.0", "3.29.1.0", "", false},
+	} {
+		got, ok := supportedDevices[tc.machine].appLoadFor(tc.os)
+		if ok != tc.supported || got != tc.appLoad {
+			t.Fatalf("%s on %s: appLoadFor = %q, %t; want %q, %t", tc.machine, tc.os, got, ok, tc.appLoad, tc.supported)
 		}
 	}
 }
@@ -65,18 +74,65 @@ func TestFirmwareWindowsPerDevice(t *testing.T) {
 func TestPayloadFileApplies(t *testing.T) {
 	shared := []string{"install-device-runtime.sh", "licenses/XOVI-LICENSE", "manifest.json"}
 	for _, name := range shared {
-		if !payloadFileApplies(name, "arm32") || !payloadFileApplies(name, "aarch64") {
+		if !payloadFileApplies(name, "arm32", "0.5.3") || !payloadFileApplies(name, "aarch64", "0.6.0") {
 			t.Fatalf("%s should be uploaded to every device", name)
 		}
 	}
-	if !payloadFileApplies("appload/qtfb-shim-32bit-arm32.so", "arm32") {
+	if !payloadFileApplies("appload/0.5.3/qtfb-shim-32bit-arm32.so", "arm32", "0.5.3") {
 		t.Fatal("the 32-bit shim of the arm32 payload must be uploaded to a reMarkable 2")
 	}
-	if payloadFileApplies("appload/qtfb-shim-32bit-aarch64.so", "arm32") {
+	if payloadFileApplies("appload/0.5.3/qtfb-shim-32bit-aarch64.so", "arm32", "0.5.3") {
 		t.Fatal("aarch64 files must not be uploaded to a 32-bit tablet")
 	}
-	if payloadFileApplies("trmnl-remarkable-device-arm32.tar.gz", "aarch64") {
+	if payloadFileApplies("trmnl-remarkable-device-arm32.tar.gz", "aarch64", "0.6.0") {
 		t.Fatal("arm32 files must not be uploaded to a Paper Pro")
+	}
+	if !payloadFileApplies("appload/0.6.0/appload-aarch64.so", "aarch64", "0.6.0") {
+		t.Fatal("the AppLoad build for the tablet's firmware must be uploaded")
+	}
+	if payloadFileApplies("appload/0.5.3/appload-aarch64.so", "aarch64", "0.6.0") {
+		t.Fatal("the AppLoad build for another firmware line must not be uploaded")
+	}
+}
+
+// The device scripts run before and without the installer, so they carry their
+// own copy of the firmware table and the AppLoad checksums. They must agree
+// with each other and with the installer, or a tablet could be sent one build
+// and then refuse it, or worse, accept the wrong one.
+func TestDeviceScriptsAgreeOnAppLoad(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	activate := read("device/activate.sh")
+	runtime := read("scripts/install-device-runtime.sh")
+	hashes := map[string]string{
+		"0.5.3-aarch64": "31214cbbe64c8bfe7d99096f077c3009dba8a42ef1a733801aa0ec59c134e7cc",
+		"0.5.3-arm32":   "0c5592e48098288fd00b71f72b3eb6821aae0bf17cc3646dd8e95bf19c391810",
+		"0.6.0-aarch64": "5b2dd6c066da6932d88a1d62be1068ca5ba751f481636dd51f727221db62e3ad",
+		"0.6.0-arm32":   "28082cb18c5ca26740d15babc7334388866394004040a659613a0640047cb551",
+	}
+	for build, hash := range hashes {
+		for name, script := range map[string]string{"activate.sh": activate, "install-device-runtime.sh": runtime} {
+			if !strings.Contains(script, build+")") || !strings.Contains(script, hash) {
+				t.Fatalf("%s does not pin AppLoad %s to %s", name, build, hash)
+			}
+		}
+	}
+	for _, device := range supportedDevices {
+		for _, line := range device.Firmware {
+			if _, ok := hashes[line.AppLoad+"-"+device.PayloadArch]; !ok {
+				t.Fatalf("%s %s needs AppLoad %s, which has no pinned build", device.Name, line.Prefix, line.AppLoad)
+			}
+		}
+	}
+	for _, script := range []string{activate, runtime} {
+		if !strings.Contains(script, "3.29.*) appload=0.6.0") || !strings.Contains(script, "3.26.*|3.27.*) appload=0.5.3") || !strings.Contains(script, "3.2[0-7].*) appload=0.5.3") {
+			t.Fatal("a device script's firmware table differs from the installer's")
+		}
 	}
 }
 

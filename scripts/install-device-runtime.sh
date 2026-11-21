@@ -20,7 +20,7 @@ rollback() {
                 *) destination="/home/root/shims/$item" ;;
             esac
             if [ -f "$rollback_dir/$item" ]; then
-                cp "$rollback_dir/$item" "$destination"
+                replace_file "$rollback_dir/$item" "$destination"
             else
                 rm -f -- "$destination"
             fi
@@ -36,6 +36,15 @@ rollback() {
     echo "Installation failed; newly installed runtime files were rolled back." >&2
 }
 trap rollback EXIT HUP INT TERM
+
+# Xochitl keeps appload.so and the shims mapped while XOVI is active, and
+# writing into a mapped library crashes it. A copy renamed into place gives the
+# new file its own inode and leaves the running one untouched.
+replace_file() {
+    cp "$1" "$2.trmnl-new"
+    chmod 644 "$2.trmnl-new"
+    mv -f "$2.trmnl-new" "$2"
+}
 
 expect_hash() {
     expected="$1"; file="$2"
@@ -66,29 +75,56 @@ case "$arch" in
 esac
 if [ "$device" = rmpp ]; then expected_payload=aarch64; else expected_payload=arm32; fi
 [ "$payload" = "$expected_payload" ] || { echo "Architecture $arch does not match the detected device ($identity)" >&2; exit 32; }
-# The reMarkable 1 no longer receives releases, so its supported window reaches
-# back to the last line it shipped instead of ending with the current one.
+# Each firmware line needs the AppLoad build made for it: 0.6.0 hooks the 3.28
+# and later interface, 0.5.3 the older one. The reMarkable 1 no longer receives
+# releases, so its window reaches back to the last line it shipped instead of
+# ending with the current one. device/activate.sh carries the same table.
+appload=""
 case "$device" in
-    rm1) case "$os_version" in 3.2[0-7].*) ;; *) echo "AppLoad 0.5.3 is incompatible with OS $os_version on the reMarkable 1 (requires >=3.20,<3.28)" >&2; exit 33;; esac ;;
-    *) case "$os_version" in 3.26.*|3.27.*) ;; *) echo "AppLoad 0.5.3 is incompatible with OS $os_version (requires >=3.26,<3.28)" >&2; exit 33;; esac ;;
+    rm1) case "$os_version" in 3.2[0-7].*) appload=0.5.3 ;; esac ;;
+    *) case "$os_version" in
+           3.26.*|3.27.*) appload=0.5.3 ;;
+           3.29.*) appload=0.6.0 ;;
+       esac ;;
 esac
+if [ -z "$appload" ]; then
+    case "$device" in
+        rm1) echo "No supported AppLoad for OS $os_version on the reMarkable 1 (supported: 3.20.x to 3.27.x)" >&2 ;;
+        *) echo "No supported AppLoad for OS $os_version (supported: 3.26.x, 3.27.x and 3.29.x)" >&2 ;;
+    esac
+    exit 33
+fi
 [ "$(systemctl is-active xochitl)" = active ] || { echo "Xochitl is not active" >&2; exit 34; }
 
 if [ "$payload" = aarch64 ]; then
     xovi_archive_hash=32d64d1262ddc984e3235c7d0340a398fe6d5b3efa6a979865f5977b32630d27
     xovi_so_hash=d4df820c25c634c511de11067279d8310fa4f656dc52bd4540db6beac4ffd446
     rebuilder_hash=6726f561557406f36347e43fc2b44a88deef4fb273d2ece88f48f427dad8800f
-    appload_hash=31214cbbe64c8bfe7d99096f077c3009dba8a42ef1a733801aa0ec59c134e7cc
-    shim_hash=6df704049aa057ff6374eaaa03a4f4a4d683b7c1ce772920d1a124be74d782c4
-    shim32_hash=aa4fb1e6f2edf5ef0137360cac77713a24ab508800301f81c19c579fee3f5031
 else
     xovi_archive_hash=9aa00537ad41e9be0c3151992bfc25106465318cf5bb4c41cf59b3ddd4866377
     xovi_so_hash=2878d88da2dcb37dcf5533fa78aeeb5cc933eb8c7e5b9041213a4e135a7fff14
     rebuilder_hash=d96530ecd74bbe15ed1efc686c125db24578379fc0e0706ec70d4c53a856e0aa
-    appload_hash=0c5592e48098288fd00b71f72b3eb6821aae0bf17cc3646dd8e95bf19c391810
-    shim_hash=4eab5f8f54d5fbaaba86497128b3b5029dc07033ac9dd499a226638cc255e9d2
-    shim32_hash=19a9d2c75741113f37f81f7affead40eeb12fa3cc41109b7f41ba154f60799cc
 fi
+case "$appload-$payload" in
+    0.5.3-aarch64)
+        appload_hash=31214cbbe64c8bfe7d99096f077c3009dba8a42ef1a733801aa0ec59c134e7cc
+        shim_hash=6df704049aa057ff6374eaaa03a4f4a4d683b7c1ce772920d1a124be74d782c4
+        shim32_hash=aa4fb1e6f2edf5ef0137360cac77713a24ab508800301f81c19c579fee3f5031 ;;
+    0.5.3-arm32)
+        appload_hash=0c5592e48098288fd00b71f72b3eb6821aae0bf17cc3646dd8e95bf19c391810
+        shim_hash=4eab5f8f54d5fbaaba86497128b3b5029dc07033ac9dd499a226638cc255e9d2
+        shim32_hash=19a9d2c75741113f37f81f7affead40eeb12fa3cc41109b7f41ba154f60799cc ;;
+    0.6.0-aarch64)
+        appload_hash=5b2dd6c066da6932d88a1d62be1068ca5ba751f481636dd51f727221db62e3ad
+        shim_hash=b25c490ada0b4cde6e2c77118014e8f63b32dbd84cfccaf63def74914e2197c3
+        shim32_hash=d4ff9a7a3513804fc6af94b963a129e11be2f95d476ab0516065d25c04e175ff ;;
+    0.6.0-arm32)
+        appload_hash=28082cb18c5ca26740d15babc7334388866394004040a659613a0640047cb551
+        shim_hash=c1792257bcb6423a22e8e066affccab6c2cf71501127ed69dc3e1c28224d3a56
+        shim32_hash=c78d85b6b9a00b4038cf8fe3353f1d20a66406770cc83d21ba21db04f17904d7 ;;
+    *) echo "No AppLoad $appload build for $payload" >&2; exit 33 ;;
+esac
+APPLOAD_STAGE="$STAGE/appload/$appload"
 XOVI_ARCHIVE="$STAGE/xovi-$payload.tar.gz"
 DEVICE_ARCHIVE="$STAGE/trmnl-remarkable-device-$payload.tar.gz"
 
@@ -97,9 +133,9 @@ source_hash=$(tr -d '[:space:]' <"$STAGE/trmnl-remarkable-device-$payload.sha256
 case "$source_hash" in *[!0-9a-f]*|'') echo "Invalid source checksum manifest" >&2; exit 30;; esac
 [ "${#source_hash}" -eq 64 ] || { echo "Invalid source checksum length" >&2; exit 30; }
 expect_hash "$source_hash" "$DEVICE_ARCHIVE"
-expect_hash "$appload_hash" "$STAGE/appload/appload-$payload.so"
-expect_hash "$shim_hash" "$STAGE/appload/qtfb-shim-$payload.so"
-expect_hash "$shim32_hash" "$STAGE/appload/qtfb-shim-32bit-$payload.so"
+expect_hash "$appload_hash" "$APPLOAD_STAGE/appload-$payload.so"
+expect_hash "$shim_hash" "$APPLOAD_STAGE/qtfb-shim-$payload.so"
+expect_hash "$shim32_hash" "$APPLOAD_STAGE/qtfb-shim-32bit-$payload.so"
 
 mkdir -p "$STATE/install-backup" "$STATE/upstream-licenses"
 {
@@ -108,6 +144,7 @@ mkdir -p "$STATE/install-backup" "$STATE/upstream-licenses"
     echo "machine=$machine"
     echo "device=$device"
     echo "os_version=$os_version"
+    echo "appload=$appload"
     echo "architecture=$arch"
     echo "xochitl=$(systemctl is-active xochitl)"
     echo "root_mount=$(mount | awk '$3=="/"{print $0}')"
@@ -135,10 +172,9 @@ mkdir -p "$rollback_dir"
 [ ! -f /home/root/shims/qtfb-shim.so ] || cp /home/root/shims/qtfb-shim.so "$rollback_dir/qtfb-shim.so"
 [ ! -f /home/root/shims/qtfb-shim-32bit.so ] || cp /home/root/shims/qtfb-shim-32bit.so "$rollback_dir/qtfb-shim-32bit.so"
 installed_appload=1
-cp "$STAGE/appload/appload-$payload.so" /home/root/xovi/extensions.d/appload.so
-cp "$STAGE/appload/qtfb-shim-$payload.so" /home/root/shims/qtfb-shim.so
-cp "$STAGE/appload/qtfb-shim-32bit-$payload.so" /home/root/shims/qtfb-shim-32bit.so
-chmod 644 /home/root/xovi/extensions.d/appload.so /home/root/shims/qtfb-shim.so /home/root/shims/qtfb-shim-32bit.so
+replace_file "$APPLOAD_STAGE/appload-$payload.so" /home/root/xovi/extensions.d/appload.so
+replace_file "$APPLOAD_STAGE/qtfb-shim-$payload.so" /home/root/shims/qtfb-shim.so
+replace_file "$APPLOAD_STAGE/qtfb-shim-32bit-$payload.so" /home/root/shims/qtfb-shim-32bit.so
 cp "$STAGE/licenses/XOVI-LICENSE" "$STATE/upstream-licenses/XOVI-LICENSE"
 cp "$STAGE/licenses/APPLOAD-LICENSE" "$STATE/upstream-licenses/APPLOAD-LICENSE"
 cp "$STAGE/licenses/EXTENSIONS-LICENSE" "$STATE/upstream-licenses/EXTENSIONS-LICENSE"
@@ -155,6 +191,10 @@ project_created=1
 tar -xzf "$DEVICE_ARCHIVE" -C "$PROJECT"
 chmod 755 "$PROJECT"/*.sh "$PROJECT"/dist/trmnl-remarkable-app/scripts/brightness_guard.sh "$PROJECT"/dist/trmnl-remarkable-app/backend/entry
 chmod 755 "$PROJECT"/scripts/*.sh 2>/dev/null || true
+# Without a hashtable built on this exact firmware, qt-resource-rebuilder aborts
+# Xochitl as soon as XOVI starts. Build it now, while a failure can still roll
+# the installation back, rather than when install.sh starts XOVI.
+sh "$PROJECT/activate.sh" --prepare
 sh "$PROJECT/install.sh"
 
 completed=1
@@ -175,4 +215,4 @@ prune_oldest 1 "$STATE/install-backup"/source.*
 
 echo "RUNTIME_INSTALL_OK"
 echo "model=$model machine=$machine device=$device os=$os_version arch=$arch payload=$payload"
-echo "xovi=0.3.3 extensions=19.0.0 appload=0.5.3"
+echo "xovi=0.3.3 extensions=19.0.0 appload=$appload"

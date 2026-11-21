@@ -1,5 +1,57 @@
 # Changelog
 
+## 2.5.0 - 2026-11-21
+
+### Added
+
+- **reMarkable OS 3.29.x on the Paper Pro and reMarkable 2.** 3.29 needs
+  AppLoad 0.6.0, which in turn does not work on 3.27 and earlier, so the
+  release now carries AppLoad 0.5.3 and 0.6.0 for both architectures. The
+  installer uploads only the build for the tablet's firmware, and the device
+  scripts check it again. XOVI and rm-xovi-extensions are unchanged. 3.28.x
+  stays blocked because it has not been validated.
+- `activate.sh` on the tablet. Every start of XOVI (installing, and
+  **Reactivate after reboot**) now goes through it. It refuses an AppLoad that
+  is not the build for the running firmware, builds qt-resource-rebuilder's
+  hashtable when it is missing or was built on another firmware, and watches
+  Xochitl after starting XOVI, restoring the stock interface at the first
+  restart.
+- **Diagnostics** reports the installed AppLoad checksum and the firmware the
+  hashtable was built on.
+
+### Fixed
+
+- XOVI was started without a hashtable for the running firmware. Without one
+  Xochitl aborts on launch, and after four restarts the tablet reboots itself;
+  just after an OS update that reboot also falls back to the previous OS. The
+  installer now builds the table first, which keeps Xochitl on its own for
+  about a minute the first time on each firmware.
+- The install reported success whenever Xochitl's environment named XOVI, which
+  is also true of a Xochitl about to abort. It now waits for the restarted
+  process and checks that it stays up.
+- Repeated installs or reactivations within ten minutes could exhaust systemd's
+  start limit for Xochitl, so one crash would reboot the tablet. The count is
+  now reset before each start.
+- Reinstalling while XOVI was active wrote over the AppLoad library Xochitl had
+  mapped. The new file is now renamed into place.
+
+### Changed
+
+- **Reactivate after reboot** refuses on an installation older than 2.5.0 and
+  asks for **Install TRMNL** instead, which keeps settings. After updating the
+  tablet's OS, install again rather than reactivating.
+- Installer device actions may take up to five minutes, since reactivating
+  after an OS update rebuilds the hashtable.
+
+### Validation
+
+- Clean install, hashtable build, launch, refresh, endpoint loss, keyboard,
+  exit and front-light restore, display sleep and wake, the refusal and rebuild
+  paths, the crash guard, recovery, uninstall and reinstall on a Paper Pro
+  running 3.29.1.0; see `docs/validation/v2.5.md`
+- The reMarkable 2 on 3.29, a real TRMNL cloud refresh, and the Windows release
+  build were not exercised
+
 ## 2.4.0 - 2026-08-12
 
 ### Fixed

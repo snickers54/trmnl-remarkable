@@ -16,6 +16,7 @@ import (
 
 var include = []string{
 	"device/install.sh",
+	"device/activate.sh",
 	"device/uninstall.sh",
 	"device/recover-stock.sh",
 	"device/diagnostics.sh",
@@ -33,6 +34,7 @@ var include = []string{
 // installation using the same absolute paths.
 var archiveNames = map[string]string{
 	"device/install.sh":        "install.sh",
+	"device/activate.sh":       "activate.sh",
 	"device/uninstall.sh":      "uninstall.sh",
 	"device/recover-stock.sh":  "recover-stock.sh",
 	"device/diagnostics.sh":    "diagnostics.sh",

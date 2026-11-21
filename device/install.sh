@@ -8,26 +8,9 @@ APP_DEST="$APP_ROOT/trmnl-remarkable"
 BACKUP_DIR="/home/root/.local/share/trmnl-remarkable/install-backup"
 STAGED="$APP_ROOT/.trmnl-remarkable.new.$$"
 
-model=$(tr -d '\000' </proc/device-tree/model 2>/dev/null || true)
-machine=$(cat /sys/devices/soc0/machine 2>/dev/null || true)
-# The SoC machine name is authoritative; the device-tree model is the fallback
-# for a kernel that does not register one. The reMarkable 1 reports two
-# different names depending on production batch, and both are in the wild.
-identity=$machine
-[ -n "$identity" ] || identity=$model
-case "$identity" in
-  "reMarkable Ferrari"|*"Paper Pro"*) device=rmpp ;;
-  "reMarkable 2.0") device=rm2 ;;
-  "reMarkable 1.0"|"reMarkable Prototype 1") device=rm1 ;;
-  *) echo "Refusing installation: connected device is not a supported reMarkable ($identity)" >&2; exit 20 ;;
-esac
-os_version=$(sed -n 's/^IMG_VERSION="\{0,1\}\([^" ]*\)"\{0,1\}$/\1/p' /etc/os-release | head -n1)
-# The reMarkable 1 no longer receives releases, so its supported window reaches
-# back to the last line it shipped instead of ending with the current one.
-case "$device" in
-  rm1) case "$os_version" in 3.2[0-7].*) ;; *) echo "Refusing installation: unsupported reMarkable OS $os_version on the reMarkable 1 (supported: 3.20.x to 3.27.x)" >&2; exit 25;; esac ;;
-  *) case "$os_version" in 3.26.*|3.27.*) ;; *) echo "Refusing installation: unsupported reMarkable OS $os_version (supported: 3.26.x and 3.27.x)" >&2; exit 25;; esac ;;
-esac
+# activate.sh holds the model and firmware table, because every later start of
+# XOVI goes through it too.
+sh "$PROJECT_DIR/activate.sh" --check || exit $?
 
 [ -d /home/root/xovi ] || { echo "Compatible XOVI is not installed; inspect OS compatibility before installing it." >&2; exit 21; }
 [ -d "$APP_ROOT" ] || { echo "AppLoad application directory is missing: $APP_ROOT" >&2; exit 22; }
@@ -75,26 +58,15 @@ trap - EXIT HUP INT TERM
 
 echo "TRMNL AppLoad bundle installed: $APP_DEST"
 
-# setsid detaches the start script from this SSH session, which is torn down as
-# soon as the installer's command returns. Backgrounding alone raced with that
-# teardown and left XOVI un-injected while still reporting success, so wait here
-# until the injection is actually visible.
-rm -f /tmp/trmnl-xovi-start.log
-setsid sh -c 'exec /home/root/xovi/start' >/tmp/trmnl-xovi-start.log 2>&1 </dev/null &
-i=0
-while [ "$i" -lt 30 ]; do
-  sleep 1
-  i=$((i + 1))
-  pid=$(pidof xochitl 2>/dev/null | awk '{print $1}')
-  if [ -n "$pid" ] && [ -r "/proc/$pid/environ" ] &&
-     tr '\000' '\n' <"/proc/$pid/environ" | grep -q '^LD_PRELOAD=/home/root/xovi/xovi.so$'; then
-    echo "AppLoad is running. On the tablet, open AppLoad and tap TRMNL."
-    exit 0
-  fi
-done
+# activate.sh checks that AppLoad matches this firmware and that the hashtable
+# was built on it, then starts XOVI and waits until Xochitl stays up with it.
+if out=$(sh "$PROJECT_DIR/activate.sh" 2>&1); then
+  echo "AppLoad is running. On the tablet, open AppLoad and tap TRMNL."
+  exit 0
+fi
 # The bundle itself is installed and verified; only the runtime start did not
 # take. Exiting non-zero here would make the caller roll back a good install, so
 # report it instead and let the user reactivate.
-echo "TRMNL_ACTIVATION_PENDING: the bundle is installed, but XOVI did not start within 30 seconds."
-tail -n 5 /tmp/trmnl-xovi-start.log 2>/dev/null || true
+echo "TRMNL_ACTIVATION_PENDING: the bundle is installed, but XOVI was not started."
+printf '%s\n' "$out" | tail -n 5
 exit 0

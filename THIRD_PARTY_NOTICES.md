@@ -2,11 +2,13 @@
 
 This project interoperates with and was designed from the public formats of:
 
-- AppLoad 0.5.3 (`asivery/rm-appload`), GPL-3.0. Its backend protocol and
-  application manifest format are used for compatibility. The easy-installer
-  release redistributes the unmodified ARM64 release binaries and a complete
-  copy of the GPL-3.0 license. Corresponding source:
-  `https://github.com/asivery/rm-appload/tree/v0.5.3`.
+- AppLoad 0.5.3 and 0.6.0 (`asivery/rm-appload`), GPL-3.0. Its backend
+  protocol and application manifest format are used for compatibility. The
+  easy-installer release redistributes the unmodified release binaries of both
+  versions (0.5.3 for reMarkable OS 3.20 to 3.27, 0.6.0 for 3.29) and a
+  complete copy of the GPL-3.0 license. Corresponding source:
+  `https://github.com/asivery/rm-appload/tree/v0.5.3` and
+  `https://github.com/asivery/rm-appload/tree/v0.6.0`.
 - XOVI 0.3.3 (`asivery/xovi`), LGPL-3.0, and rm-xovi-extensions release 19
   (`asivery/rm-xovi-extensions`), GPL-3.0. The easy-installer release
   redistributes the unmodified, checksum-pinned ARM64 runtime archive and copies
@@ -15,7 +17,7 @@ This project interoperates with and was designed from the public formats of:
   `https://github.com/asivery/rm-xovi-extensions/tree/v19-23052026`.
 
 The Windows easy-installer ZIP also contains the complete corresponding source
-archives for all three redistributed runtime components in `Corresponding
+archives for all four redistributed runtime components in `Corresponding
 Source/`, so the exact source remains available with the binaries.
 - TRMNL Display (`usetrmnl/trmnl-display`), MIT. The Device API request shape,
   configuration concepts, and TRMNL icon were adapted. The upstream license is

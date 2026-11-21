@@ -9,8 +9,9 @@ No command line is required.
 > by it may not be covered by reMarkable warranty/support. Uninstalling TRMNL
 > does not disable Developer Mode; leaving it requires official software recovery.
 
-1. Confirm this is a reMarkable Paper Pro or reMarkable 2 on firmware 3.26.x or
-   3.27.x, or a reMarkable 1 on 3.20.x through 3.27.x.
+1. Confirm this is a reMarkable Paper Pro or reMarkable 2 on firmware 3.26.x,
+   3.27.x or 3.29.x, or a reMarkable 1 on 3.20.x through 3.27.x. 3.28.x is not
+   supported.
 2. Read reMarkable's [Developer Mode article](https://support.remarkable.com/s/article/Developer-mode).
 3. Sync/export your documents, enable Developer Mode, complete the reset and
    onboarding, then display the tablet's SSH password.
@@ -23,7 +24,7 @@ No command line is required.
 Download the ZIP and `SHA256SUMS.txt` from the same GitHub Release. In PowerShell:
 
 ```powershell
-Get-FileHash .\TRMNL-for-reMarkable-2.4.0-Windows-x64.zip -Algorithm SHA256
+Get-FileHash .\TRMNL-for-reMarkable-2.5.0-Windows-x64.zip -Algorithm SHA256
 ```
 
 The value must exactly match `SHA256SUMS.txt`. Extract the entire ZIP; do not run

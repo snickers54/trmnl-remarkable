@@ -14,5 +14,8 @@ For a bug report, include:
 - Reproduction steps
 
 Never post API keys, SSH passwords, private keys, or an unredacted config file.
-Firmware outside 3.26.x/3.27.x is a compatibility request, not an installation
-failure; the installer intentionally refuses it.
+Firmware outside 3.26.x, 3.27.x and 3.29.x (3.20.x to 3.27.x on the reMarkable
+1) is a compatibility request, not an installation failure; the installer
+intentionally refuses it. After updating the tablet's OS, run **Install TRMNL**
+again before opening an issue: **Reactivate after reboot** refuses on purpose
+until the AppLoad build for the new OS is installed.
